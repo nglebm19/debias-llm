@@ -32,7 +32,8 @@ class MedicalAgentSystem:
 				"text-generation",
 				model=self.model,
 				tokenizer=self.tokenizer,
-				max_length=200,
+				# Avoid max_length issues by enabling truncation at encode time
+				truncation=True,
 				do_sample=True,
 				temperature=0.7,
 				pad_token_id=self.tokenizer.eos_token_id
@@ -44,18 +45,19 @@ class MedicalAgentSystem:
 			# Fallback to simpler text generation
 			self.generator = self._fallback_generator
 	
-	def _fallback_generator(self, prompt, max_length=100):
+	def _fallback_generator(self, prompt, max_new_tokens=120):
 		"""Fallback generator when models fail to load."""
 		return [{"generated_text": f"{prompt} [Model unavailable - using fallback logic]"}]
 	
-	def _generate_response(self, prompt, max_length=150):
+	def _generate_response(self, prompt, max_new_tokens=150):
 		"""Generate response using the loaded model."""
 		try:
 			if self.generator:
-				result = self.generator(prompt, max_length=max_length)
+				# Use max_new_tokens instead of max_length to prevent prompt-length conflicts
+				result = self.generator(prompt, max_new_tokens=max_new_tokens)
 				return result[0]["generated_text"].replace(prompt, "").strip()
 			else:
-				return self._fallback_generator(prompt, max_length)[0]["generated_text"]
+				return self._fallback_generator(prompt, max_new_tokens)[0]["generated_text"]
 		except Exception as e:
 			logger.error(f"Generation error: {e}")
 			return f"[Generation error: {e}]"

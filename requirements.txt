@@ -1,0 +1,26 @@
+# Core dependencies for Devil's Advocate Multi-Agent Medical Analysis System
+
+# Gradio for the web interface
+gradio>=4.0.0
+
+# Hugging Face Transformers for language models
+transformers>=4.30.0
+
+# PyTorch for model inference
+torch>=2.0.0
+
+# Tokenizers for text processing
+tokenizers>=0.13.0
+
+# NumPy for numerical operations
+numpy>=1.24.0
+
+# Logging and utilities
+python-dateutil>=2.8.0
+
+# Optional: For better performance on GPU
+# torchvision>=0.15.0  # Uncomment if using GPU
+
+# Optional: For additional model support
+# accelerate>=0.20.0   # Uncomment for better model loading
+# safetensors>=0.3.0   # Uncomment for safer model loading

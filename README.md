@@ -6,26 +6,27 @@ A demonstration web application that shows how multiple AI agents can overcome d
 
 This demo showcases a three-agent system designed to simulate and overcome common diagnostic biases:
 
-1. **Agent 1 (Diagnostician)**: Provides initial diagnosis (intentionally biased)
-2. **Agent 2 (Devil's Advocate)**: Critiques and identifies bias
-3. **Agent 3 (Synthesizer)**: Creates improved final diagnosis
+1. **Agent 1 (Diagnostician)**: Provides initial diagnosis using all available information (HPI + PMH + Physical Exam)
+2. **Agent 2 (Independent Devil's Advocate)**: Diagnoses from symptoms and physical exam only, then evaluates overlap with past medical history
+3. **Agent 3 (Synthesizer)**: Combines both perspectives to create improved final diagnosis with impact analysis
 
 ## 🚀 Key Features
 
 - **Multi-Agent Architecture**: Three specialized AI agents working in sequence
-- **Bias Simulation**: Hardcoded bias patterns for educational demonstration
+- **Bias Detection**: Agent 2 independently evaluates symptoms vs. past medical history
+- **Overlap Scoring**: Qualitative assessment (High/Medium/Low) of current symptoms vs. past conditions
 - **Interactive Web Interface**: Clean, intuitive Gradio-based UI
 - **Sample Medical Cases**: Pre-built cases demonstrating different bias types
 - **Custom Case Input**: Support for user-defined medical scenarios
-- **Educational Content**: Built-in learning points and bias analysis
+- **Real LLM Outputs**: All agents generate concrete diagnostic content using Hugging Face models
 
 ## 🏗️ Architecture
 
 ```
 User Input → Agent 1 (Diagnostician) → Agent 2 (Devil's Advocate) → Agent 3 (Synthesizer) → Final Output
                 ↓                           ↓                           ↓
-            Initial Diagnosis         Bias Identification         Balanced Synthesis
-            (May be biased)         (Challenges assumptions)    (Improved diagnosis)
+            Full-case Diagnosis      Symptoms+Exam Dx +        Balanced Synthesis +
+            (HPI + PMH + Exam)      Overlap Score            Impact Analysis
 ```
 
 ## 📋 Prerequisites
@@ -38,7 +39,7 @@ User Input → Agent 1 (Diagnostician) → Agent 2 (Devil's Advocate) → Agent 
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/nglebm19/debias-llm.git
    cd debias-llm
    ```
 
@@ -68,7 +69,7 @@ User Input → Agent 1 (Diagnostician) → Agent 2 (Devil's Advocate) → Agent 
 
 4. **Click "Run Analysis"** to see the three-agent process in action
 
-5. **Review the results** to see how bias is identified and addressed
+5. **Review the results** to see how each agent contributes to the final diagnosis
 
 ### Sample Cases
 
@@ -106,9 +107,9 @@ self.generator = pipeline(
     "text-generation",
     model=self.model,
     tokenizer=self.tokenizer,
-    max_length=200,        # Adjust for longer/shorter outputs
+    max_new_tokens=200,        # Adjust for longer/shorter outputs
     do_sample=True,
-    temperature=0.7,       # Lower = more focused, Higher = more creative
+    temperature=0.7,           # Lower = more focused, Higher = more creative
     pad_token_id=self.tokenizer.eos_token_id
 )
 ```
@@ -144,20 +145,21 @@ The application can be deployed on:
 
 ## 📊 Understanding the Output
 
-### Agent 1: Initial Diagnosis
-- **Purpose**: Simulates a biased initial assessment
-- **Common Biases**: Anchoring, confirmation bias, overconfidence
-- **Output**: Initial diagnosis that may overlook important factors
+### Agent 1: Full-Case Diagnosis
+- **Purpose**: Comprehensive initial assessment using all available information
+- **Input**: History of Present Illness + Past Medical History + Physical Examination
+- **Output**: Initial diagnosis with clinical reasoning
 
-### Agent 2: Devil's Advocate Critique
-- **Purpose**: Identifies and challenges biases
-- **Focus**: Assumption testing, alternative explanations
-- **Output**: Critical analysis highlighting potential errors
+### Agent 2: Independent Devil's Advocate
+- **Purpose**: Independent evaluation and overlap assessment
+- **Phase 1**: Diagnosis based only on current symptoms and physical exam
+- **Phase 2**: Overlap score (High/Medium/Low) with past medical history
+- **Output**: Independent diagnosis + overlap score + rationale
 
 ### Agent 3: Final Synthesis
-- **Purpose**: Creates balanced, improved diagnosis
-- **Approach**: Evidence-based synthesis
-- **Output**: Final diagnosis addressing identified biases
+- **Purpose**: Combines both perspectives for balanced final assessment
+- **Approach**: Evidence-based synthesis with impact analysis
+- **Output**: Final diagnosis + differential + impact of past disease + next steps
 
 ## 🧠 Bias Types Demonstrated
 
@@ -182,7 +184,7 @@ The application can be deployed on:
 
 3. **Performance Issues**
    - Use smaller models for faster inference
-   - Reduce max_length parameter
+   - Reduce max_new_tokens parameter
    - Consider GPU acceleration if available
 
 ### Error Handling

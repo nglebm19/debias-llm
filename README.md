@@ -1,3 +1,14 @@
+---
+title: Devil's Advocate Multi-Agent Medical Analysis System
+emoji: 🏥
+colorFrom: blue
+colorTo: green
+sdk: gradio
+sdk_version: "1.0.0"
+app_file: app.py
+pinned: false
+---
+
 # 🏥 Devil's Advocate Multi-Agent Medical Analysis System
 
 A demonstration web application that shows how multiple AI agents can overcome diagnostic bias by simulating a clinical review process. This system demonstrates the power of multi-agent collaboration in reducing cognitive biases in medical decision-making.

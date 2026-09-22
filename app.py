@@ -1,74 +1,35 @@
 import gradio as gr
-import time
-import re
 from agents import run_medical_analysis
-from cases import get_case_titles, get_case_description, get_bias_analysis
+from cases import get_case_titles, get_case_description, strip_bias_note
 
-# Global variable to store current analysis results
-current_results = None
-
-def extract_overlap(agent2_text: str) -> str:
-	"""Extract overlap score and rationale from Agent 2 text."""
-	if not agent2_text:
-		return ""
-	m_score = re.search(r"Overlap Score:\n([\s\S]*?)(?:\n\n|$)", agent2_text, flags=re.IGNORECASE)
-	score = m_score.group(1).strip() if m_score else "[n/a]"
-	m_rat = re.search(r"Rationale:\n([\s\S]*?)(?:\n\n|$)", agent2_text, flags=re.IGNORECASE)
-	rat = m_rat.group(1).strip() if m_rat else "[n/a]"
-	return f"**Overlap Summary**\n\n- Score: {score}\n\n{rat}"
+NO_CASE = "Select a case..."
 
 def analyze_medical_case(case_input, custom_case_text=""):
-	"""
-	Run the complete medical analysis using the revised three-agent system.
-	"""
-	global current_results
-	
-	# Determine which case to analyze
-	if case_input == "custom" and custom_case_text.strip():
+	"""Run the three-agent analysis on the custom text if given, else the selected sample case."""
+	if custom_case_text and custom_case_text.strip():
 		case_text = custom_case_text.strip()
 		case_display = f"**Custom Case:**\n\n{case_text}"
+	elif case_input in get_case_titles():
+		full = get_case_description(case_input)
+		case_text = strip_bias_note(full)
+		case_display = f"**{get_case_titles()[case_input]}**\n\n{full}"
 	else:
-		case_text = get_case_description(case_input)
-		case_display = f"**{get_case_titles()[case_input]}**\n\n{case_text}"
-	
-	# Run the analysis
-	try:
-		results = run_medical_analysis(case_text)
-		current_results = results
-		
-		if results["status"] == "success":
-			overlap_md = extract_overlap(results.get("agent2", ""))
-			return (
-				case_display,
-				f"**Agent 1 (Diagnostician):**\n\n{results['agent1']}",
-				f"**Agent 2 (Independent Devil's Advocate):**\n\n{results['agent2']}",
-				f"**Agent 3 (Synthesizer) – Final Result:**\n\n{results['agent3']}",
-				overlap_md
-			)
-		else:
-			error_msg = f"Error: {results.get('error', 'Unknown error')}"
-			return (
-				case_display,
-				f"**Error:** {error_msg}",
-				f"**Error:** {error_msg}",
-				f"**Error:** {error_msg}",
-				""
-			)
-			
-	except Exception as e:
-		error_msg = f"Unexpected error: {str(e)}"
-		return (
-			case_display,
-			f"**Error:** {error_msg}",
-			f"**Error:** {error_msg}",
-			f"**Error:** {error_msg}",
-			""
-		)
+		return "", "**Select a sample case or enter a custom case.**", "", "", ""
+
+	results = run_medical_analysis(case_text)
+	if results["status"] != "success":
+		err = f"**Error:** {results.get('error', 'Unknown error')}"
+		return case_display, err, err, err, ""
+	return (
+		case_display,
+		f"**Agent 1 (Diagnostician):**\n\n{results['agent1']}",
+		f"**Agent 2 (Independent Devil's Advocate):**\n\n{results['agent2']}",
+		f"**Agent 3 (Synthesizer) – Final Result:**\n\n{results['agent3']}",
+		results["overlap"],
+	)
 
 def clear_analysis():
 	"""Clear all analysis outputs."""
-	global current_results
-	current_results = None
 	return "", "", "", "", ""
 
 # Create the Gradio interface
@@ -100,9 +61,9 @@ def create_interface():
 			with gr.Column(scale=1):
 				gr.Markdown("### 📋 Case Selection")
 				case_dropdown = gr.Dropdown(
-					choices=["Select a case..."] + list(get_case_titles().keys()),
+					choices=[NO_CASE] + list(get_case_titles().keys()),
 					label="Choose a Sample Case",
-					value="Select a case...",
+					value=NO_CASE,
 					interactive=True
 				)
 				custom_case = gr.Textbox(
@@ -131,12 +92,6 @@ def create_interface():
 			fn=clear_analysis,
 			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel]
 		)
-		
-		def on_custom_text_change(text):
-			if text.strip():
-				return "custom"
-			return case_dropdown.value
-		custom_case.change(fn=on_custom_text_change, inputs=custom_case, outputs=case_dropdown)
 		
 		gr.Markdown("""
 		---

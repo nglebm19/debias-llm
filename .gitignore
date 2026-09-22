@@ -167,3 +167,6 @@ results/
 config.ini
 secrets.json
 .env.local
+
+# LLM response cache
+.cache/

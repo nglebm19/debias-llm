@@ -1,321 +1,221 @@
-import torch
-from transformers import pipeline, AutoTokenizer, AutoModelForCausalLM
 import logging
 import re
+from dataclasses import dataclass
+from typing import Literal
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
+from pydantic import BaseModel
+
+from llm import LLMClient, get_client
+
 logger = logging.getLogger(__name__)
 
-class MedicalAgentSystem:
-	def __init__(self):
-		"""Initialize the medical agent system with models and pipelines."""
-		self.model_name = "microsoft/DialoGPT-medium"
-		self.tokenizer = None
-		self.model = None
-		self.generator = None
-		self._load_models()
-	
-	def _load_models(self):
-		"""Load the language models and tokenizer."""
-		try:
-			logger.info(f"Loading model: {self.model_name}")
-			self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-			self.model = AutoModelForCausalLM.from_pretrained(self.model_name)
-			
-			# Add padding token if not present
-			if self.tokenizer.pad_token is None:
-				self.tokenizer.pad_token = self.tokenizer.eos_token
-			
-			# Create text generation pipeline
-			self.generator = pipeline(
-				"text-generation",
-				model=self.model,
-				tokenizer=self.tokenizer,
-				truncation=True,
-				do_sample=True,
-				temperature=0.7,
-				pad_token_id=self.tokenizer.eos_token_id
-			)
-			logger.info("Models loaded successfully")
-			
-		except Exception as e:
-			logger.error(f"Error loading models: {e}")
-			self.generator = self._fallback_generator
-	
-	def _fallback_generator(self, prompt, max_new_tokens=120):
-		"""Fallback generator when models fail to load."""
-		return [{"generated_text": f"{prompt} [Model unavailable - using fallback logic]"}]
-	
-	def _generate_response(self, prompt, max_new_tokens=150):
-		"""Generate response using the loaded model."""
-		try:
-			if self.generator:
-				result = self.generator(prompt, max_new_tokens=max_new_tokens)
-				return result[0]["generated_text"].replace(prompt, "").strip()
-			else:
-				return self._fallback_generator(prompt, max_new_tokens)[0]["generated_text"]
-		except Exception as e:
-			logger.error(f"Generation error: {e}")
-			return f"[Generation error: {e}]"
 
-# Utilities to extract sections from case text
+# ---------------------------------------------------------------------------
+# Case parsing
+# ---------------------------------------------------------------------------
 
-def _extract_section(case_text: str, title: str) -> str:
-	pattern = rf"{title}\s*:?(.*?)(?:\n\n|$)"
-	match = re.search(pattern, case_text, flags=re.IGNORECASE | re.DOTALL)
-	return match.group(1).strip() if match else ""
+_SECTION_KEYS = {
+	"patient": "demographics",
+	"chief complaint": "chief_complaint",
+	"history of present illness": "hpi",
+	"past medical history": "pmh",
+	"physical examination": "exam",
+}
 
-# Agent 1: Full-case Diagnostician
 
-def diagnostician_agent(case_text):
-	"""Use HPI + PMH + Physical Exam to produce initial diagnosis and brief reasoning."""
-	agent_system = MedicalAgentSystem()
-	
-	hpi = _extract_section(case_text, "History of Present Illness") or _extract_section(case_text, "Chief Complaint")
-	pmh = _extract_section(case_text, "Past Medical History")
-	physical = _extract_section(case_text, "Physical Examination")
-	
-	prompt = f"""You are Agent 1 (Diagnostician), a medical expert. Analyze the case below and provide a concrete diagnosis with reasoning.
+@dataclass
+class Case:
+	demographics: str = ""
+	chief_complaint: str = ""
+	hpi: str = ""
+	pmh: str = ""
+	exam: str = ""
 
-Patient Information:
-HPI: {hpi}
-PMH: {pmh}
-Physical Exam: {physical}
+	@property
+	def presentation(self) -> str:
+		"""Everything except past medical history: what Agent 2 may see in its blind step."""
+		parts = [
+			("Patient", self.demographics),
+			("Chief Complaint", self.chief_complaint),
+			("History of Present Illness", self.hpi),
+			("Physical Examination", self.exam),
+		]
+		return "\n\n".join(f"{title}:\n{body}" for title, body in parts if body)
 
-Based on this information, provide:
-Initial Diagnosis:
-- [Write a specific medical diagnosis here]
+	@property
+	def full(self) -> str:
+		pmh = f"\n\nPast Medical History:\n{self.pmh}" if self.pmh else ""
+		return self.presentation + pmh
 
-Reasoning:
-- [Explain why you chose this diagnosis]
-- [List key findings that support it]
-- [Consider differential diagnoses briefly]
-"""
-	
-	response = agent_system._generate_response(prompt, max_new_tokens=200)
-	
-	# If response is empty or contains placeholders, provide a concrete example
-	if not response or "[not available]" in response or "[n/a]" in response:
-		# Generate a concrete diagnosis based on case content
-		if "abdominal pain" in case_text.lower() and "right lower quadrant" in case_text.lower():
-			response = """Initial Diagnosis:
-- Acute appendicitis
 
-Reasoning:
-- RLQ pain with associated symptoms suggests appendiceal inflammation
-- Physical exam findings support acute abdomen
-- Consider mesenteric adenitis or ovarian pathology in differential"""
-		elif "chest pain" in case_text.lower() or "shortness of breath" in case_text.lower():
-			response = """Initial Diagnosis:
-- Acute coronary syndrome
+def parse_case(text: str) -> Case:
+	"""Split case text into sections. Text without recognised headers is treated as the presentation."""
+	sections: dict[str, list[str]] = {}
+	current = None
+	for line in text.splitlines():
+		m = re.match(r"^\s*([A-Za-z ]+?)\s*:\s*(.*)$", line)
+		key = _SECTION_KEYS.get(m.group(1).strip().lower()) if m else None
+		if m and key:
+			current = key
+			sections[current] = [m.group(2)] if m.group(2) else []
+		elif current:
+			sections[current].append(line)
+	if not sections:
+		return Case(hpi=text.strip())
+	return Case(**{k: "\n".join(v).strip() for k, v in sections.items()})
 
-Reasoning:
-- Chest symptoms with risk factors suggest cardiac etiology
-- Physical exam findings support cardiovascular assessment
-- Consider pulmonary embolism or aortic dissection in differential"""
-		else:
-			response = """Initial Diagnosis:
-- [Specific diagnosis based on symptoms]
 
-Reasoning:
-- [Clinical reasoning for diagnosis]
-- [Supporting evidence from exam]
-- [Differential considerations]"""
-	
-	return response
+# ---------------------------------------------------------------------------
+# Structured outputs
+# ---------------------------------------------------------------------------
 
-# Agent 2: Independent Devil's Advocate
+class Diagnosis(BaseModel):
+	diagnosis: str
+	reasoning: list[str]
+	differential: list[str]
 
-def independent_da_agent(case_text: str) -> str:
-	"""Phase A: Diagnose from Symptoms/HPI + Exam only. Phase B: compute overlap with PMH+HPI and justify."""
-	agent_system = MedicalAgentSystem()
-	
-	hpi = _extract_section(case_text, "History of Present Illness") or _extract_section(case_text, "Chief Complaint")
-	physical = _extract_section(case_text, "Physical Examination")
-	pmh = _extract_section(case_text, "Past Medical History")
-	
-	prompt = f"""You are Agent 2 (Independent Devil's Advocate), a critical medical evaluator.
 
-Step 1: Diagnose based ONLY on current symptoms and physical exam (ignore past medical history for this step).
+class Overlap(BaseModel):
+	score: Literal["High", "Medium", "Low"]
+	rationale: list[str]
 
-Current Symptoms: {hpi}
-Physical Examination: {physical}
 
-Step 2: Now consider the past medical history and assess overlap with current symptoms.
+class Synthesis(BaseModel):
+	most_likely_diagnosis: str
+	agrees_with_agent1: bool
+	differential: list[str]
+	impact_of_past_disease: str
+	next_steps: list[str]
 
-Past Medical History: {pmh}
 
-Provide your analysis in this exact format:
+# ---------------------------------------------------------------------------
+# Agents
+# ---------------------------------------------------------------------------
 
-Diagnosis from Symptoms + Exam:
-- [Write specific diagnosis based only on current symptoms and exam]
+_DISCLAIMER = "This is an educational demo, not clinical advice."
 
-Overlap Score:
-- [High/Medium/Low - how much current symptoms relate to past conditions]
+_A1_SYSTEM = f"""You are Agent 1 (Diagnostician), an experienced clinician. Given the full case, including past medical history, give your single most likely diagnosis, the key findings supporting it, and a short differential. {_DISCLAIMER}"""
 
-Rationale:
-- [Explain why you assigned this overlap score]
-- [Describe the relationship between past and present conditions]
-- [Consider if past conditions are still relevant]
-"""
-	
-	response = agent_system._generate_response(prompt, max_new_tokens=230)
-	
-	# If response is empty or contains placeholders, provide concrete content
-	if not response or "[not available]" in response or "[n/a]" in response:
-		# Generate concrete content based on case
-		if "appendectomy" in case_text.lower():
-			response = """Diagnosis from Symptoms + Exam:
-- Acute gastroenteritis or mesenteric adenitis
+_A2_BLIND_SYSTEM = f"""You are Agent 2 (Independent Devil's Advocate), a critical clinician. You are deliberately NOT given the patient's past medical history. Diagnose using only the current symptoms and physical exam. Do not guess or assume a past history. {_DISCLAIMER}"""
 
-Overlap Score:
-- Low
+_A2_OVERLAP_SYSTEM = f"""You are Agent 2 (Independent Devil's Advocate). You already made a diagnosis from current symptoms and exam alone. Now you are shown the past medical history. Rate the overlap between the past medical history and the current presentation:
+- High: the past condition plausibly explains or directly relates to the current symptoms.
+- Medium: partial or indirect relationship (e.g. risk factor, complication).
+- Low: past condition is resolved or unrelated to the current presentation.
+Explain the rating and say whether the past history is likely to bias a clinician who sees it. {_DISCLAIMER}"""
 
-Rationale:
-- Current symptoms (diffuse abdominal pain) differ from previous appendicitis location
-- Past appendectomy is resolved and unlikely related to current presentation
-- Consider new acute process unrelated to surgical history"""
-		elif "myocardial infarction" in case_text.lower() or "stent" in case_text.lower():
-			response = """Diagnosis from Symptoms + Exam:
-- Acute respiratory condition (pneumonia, pleural effusion)
+_A3_SYSTEM = f"""You are Agent 3 (Synthesizer). You receive the full case, Agent 1's diagnosis (made with past history) and Agent 2's blind diagnosis plus its overlap rating. Weigh the two, decide the most likely diagnosis, and explain how the past disease does or does not affect it. If overlap is Low, be cautious about letting past history drive the diagnosis. Set agrees_with_agent1 to whether your final diagnosis matches Agent 1's. {_DISCLAIMER}"""
 
-Overlap Score:
-- Medium
 
-Rationale:
-- Respiratory symptoms may be exacerbated by cardiac history
-- Past MI could contribute to current dyspnea through heart failure
-- Consider both cardiac and respiratory etiologies"""
-		else:
-			response = """Diagnosis from Symptoms + Exam:
-- [Specific diagnosis from current symptoms and exam]
+def _fmt_dx(dx: Diagnosis) -> str:
+	return (
+		f"Diagnosis: {dx.diagnosis}\n"
+		f"Reasoning: {'; '.join(dx.reasoning)}\n"
+		f"Differential: {'; '.join(dx.differential)}"
+	)
 
-Overlap Score:
-- [High/Medium/Low]
 
-Rationale:
-- [Explanation of overlap assessment]
-- [Relationship between past and present conditions]
-- [Clinical reasoning for score]"""
-	
-	return response
+def diagnostician_agent(case: Case, llm: LLMClient) -> Diagnosis:
+	"""Agent 1: full case (HPI + PMH + exam)."""
+	return llm.generate(_A1_SYSTEM, case.full, Diagnosis)
 
-# Parsers for Agent 2
 
-def parse_da_overlap(da_text: str) -> dict:
-	"""Parse Agent 2 text into components for UI summarization."""
-	def grab(header: str) -> str:
-		m = re.search(rf"{header}:\n([\s\S]*?)(?:\n\n|$)", da_text, flags=re.IGNORECASE)
-		return m.group(1).strip() if m else ""
-	return {
-		"dx_sym_exam": grab("Diagnosis from Symptoms \+ Exam"),
-		"overlap": grab("Overlap Score"),
-		"rationale": grab("Rationale")
-	}
+def blind_da_agent(case: Case, llm: LLMClient) -> Diagnosis:
+	"""Agent 2, step 1: diagnosis from symptoms + exam only. PMH never enters this prompt."""
+	return llm.generate(_A2_BLIND_SYSTEM, case.presentation, Diagnosis)
 
-# Agent 3: Synthesizer
 
-def synthesizer_agent(case_text: str, a1_text: str, a2_text: str) -> str:
-	"""Combine Agent 1 and Agent 2 to produce final result, including impact of past disease."""
-	agent_system = MedicalAgentSystem()
-	
-	prompt = f"""You are Agent 3 (Synthesizer), a medical expert who combines multiple perspectives.
+def overlap_agent(case: Case, blind: Diagnosis, llm: LLMClient) -> Overlap:
+	"""Agent 2, step 2: reveal PMH and score overlap with the current presentation."""
+	user = (
+		f"{case.presentation}\n\n"
+		f"Your blind diagnosis:\n{_fmt_dx(blind)}\n\n"
+		f"Past Medical History:\n{case.pmh or 'None recorded'}"
+	)
+	return llm.generate(_A2_OVERLAP_SYSTEM, user, Overlap)
 
-Patient Case: {case_text}
 
-Agent 1's Diagnosis: {a1_text}
-Agent 2's Analysis: {a2_text}
+def synthesizer_agent(case: Case, a1: Diagnosis, blind: Diagnosis, overlap: Overlap, llm: LLMClient) -> Synthesis:
+	"""Agent 3: combine both perspectives."""
+	user = (
+		f"{case.full}\n\n"
+		f"--- Agent 1 (saw past history) ---\n{_fmt_dx(a1)}\n\n"
+		f"--- Agent 2 (blind to past history) ---\n{_fmt_dx(blind)}\n"
+		f"Overlap with past history: {overlap.score}\n"
+		f"Overlap rationale: {'; '.join(overlap.rationale)}"
+	)
+	return llm.generate(_A3_SYSTEM, user, Synthesis)
 
-Synthesize these perspectives into a comprehensive final assessment:
 
-Most Likely Diagnosis:
-- [Write the most likely final diagnosis]
+# ---------------------------------------------------------------------------
+# Rendering (markdown for the UI)
+# ---------------------------------------------------------------------------
 
-Differential:
-- [List 2-4 alternative diagnoses to consider]
+def _bullets(items: list[str]) -> str:
+	return "\n".join(f"- {i}" for i in items)
 
-Impact of Past Disease:
-- [Explain how past medical history affects current symptoms and diagnosis]
 
-Next Steps:
-- [List 2-3 immediate diagnostic or treatment steps]
-"""
-	
-	response = agent_system._generate_response(prompt, max_new_tokens=260)
-	
-	# If response is empty or contains placeholders, provide concrete content
-	if not response or "[not available]" in response or "[n/a]" in response:
-		# Generate concrete synthesis based on case
-		if "abdominal pain" in case_text.lower():
-			response = """Most Likely Diagnosis:
-- Acute gastroenteritis or mesenteric adenitis
+def render_diagnosis(dx: Diagnosis) -> str:
+	return (
+		f"**Diagnosis:** {dx.diagnosis}\n\n"
+		f"**Reasoning:**\n{_bullets(dx.reasoning)}\n\n"
+		f"**Differential:**\n{_bullets(dx.differential)}"
+	)
 
-Differential:
-- Acute appendicitis (despite previous surgery)
-- Ovarian pathology (if female)
-- Mesenteric ischemia
 
-Impact of Past Disease:
-- Previous appendectomy reduces likelihood of recurrent appendicitis
-- Past surgery may create adhesions affecting current symptoms
+def render_agent2(blind: Diagnosis, overlap: Overlap) -> str:
+	return (
+		f"**Diagnosis from symptoms + exam only:** {blind.diagnosis}\n\n"
+		f"{_bullets(blind.reasoning)}\n\n"
+		f"**Overlap with past history:** {overlap.score}\n\n"
+		f"{_bullets(overlap.rationale)}"
+	)
 
-Next Steps:
-- Abdominal CT scan to rule out acute pathology
-- Pain management and fluid resuscitation
-- Surgical consultation if symptoms worsen"""
-		elif "chest pain" in case_text.lower() or "shortness of breath" in case_text.lower():
-			response = """Most Likely Diagnosis:
-- Acute respiratory condition with cardiac considerations
 
-Differential:
-- Community-acquired pneumonia
-- Acute coronary syndrome
-- Pulmonary embolism
+def render_synthesis(s: Synthesis) -> str:
+	return (
+		f"**Most likely diagnosis:** {s.most_likely_diagnosis}\n\n"
+		f"**Differential:**\n{_bullets(s.differential)}\n\n"
+		f"**Impact of past disease:** {s.impact_of_past_disease}\n\n"
+		f"**Next steps:**\n{_bullets(s.next_steps)}"
+	)
 
-Impact of Past Disease:
-- Previous MI increases cardiac risk and may exacerbate respiratory symptoms
-- Cardiac history requires careful monitoring during respiratory illness
 
-Next Steps:
-- Chest X-ray and ECG
-- Cardiac biomarkers
-- Respiratory and cardiac monitoring"""
-		else:
-			response = """Most Likely Diagnosis:
-- [Final diagnosis based on synthesis]
+def render_overlap_summary(a1: Diagnosis, blind: Diagnosis, overlap: Overlap, s: Synthesis) -> str:
+	if a1.diagnosis.strip().lower() == blind.diagnosis.strip().lower():
+		agreement = "Agents 1 and 2 reached the same diagnosis."
+	else:
+		agreement = f"Agents disagree: **{a1.diagnosis}** (with history) vs **{blind.diagnosis}** (without)."
+	changed = "Final answer kept Agent 1's diagnosis." if s.agrees_with_agent1 else "Final answer departs from Agent 1."
+	return f"**Overlap Summary**\n\n- Score: {overlap.score}\n- {agreement}\n- {changed}"
 
-Differential:
-- [Alternative diagnoses to consider]
 
-Impact of Past Disease:
-- [How past conditions affect current presentation]
-
-Next Steps:
-- [Immediate actions to take]"""
-	
-	return response
-
+# ---------------------------------------------------------------------------
 # Orchestration
+# ---------------------------------------------------------------------------
 
-def run_medical_analysis(case_text):
-	"""Run the revised 3-agent pipeline and return all outputs."""
+def run_medical_analysis(case_text: str, llm: LLMClient | None = None) -> dict:
+	"""Run the 3-agent pipeline. Returns markdown per agent plus the structured results."""
+	llm = llm or get_client()
 	try:
-		agent1 = diagnostician_agent(case_text)
-		agent2 = independent_da_agent(case_text)
-		agent3 = synthesizer_agent(case_text, agent1, agent2)
+		case = parse_case(case_text)
+		a1 = diagnostician_agent(case, llm)
+		blind = blind_da_agent(case, llm)
+		overlap = overlap_agent(case, blind, llm)
+		synth = synthesizer_agent(case, a1, blind, overlap, llm)
 		return {
-			"agent1": agent1,
-			"agent2": agent2,
-			"agent3": agent3,
-			"status": "success"
+			"status": "success",
+			"agent1": render_diagnosis(a1),
+			"agent2": render_agent2(blind, overlap),
+			"agent3": render_synthesis(synth),
+			"overlap": render_overlap_summary(a1, blind, overlap, synth),
+			"structured": {
+				"agent1": a1.model_dump(),
+				"agent2_blind": blind.model_dump(),
+				"agent2_overlap": overlap.model_dump(),
+				"agent3": synth.model_dump(),
+			},
 		}
 	except Exception as e:
 		logger.error(f"Pipeline error: {e}")
-		return {
-			"agent1": f"[error] {e}",
-			"agent2": f"[error] {e}",
-			"agent3": f"[error] {e}",
-			"status": "error",
-			"error": str(e)
-		}
+		return {"status": "error", "error": str(e)}

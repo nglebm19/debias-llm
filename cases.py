@@ -8,6 +8,8 @@ These cases are designed to demonstrate different types of diagnostic bias:
 4. Overconfidence bias - making definitive diagnoses too quickly
 """
 
+import re
+
 SAMPLE_CASES = {
     "case_1": {
         "title": "Resolved Appendicitis with New Symptoms",
@@ -137,6 +139,10 @@ def get_all_cases():
 def get_case_titles():
     """Get a list of case titles for the UI dropdown."""
     return {case_id: case_data["title"] for case_id, case_data in SAMPLE_CASES.items()}
+
+def strip_bias_note(text):
+    """Remove the trailing 'This case demonstrates...' teaching note so it never reaches the agents."""
+    return re.sub(r"\n\s*This case demonstrates.*$", "", text, flags=re.DOTALL).strip()
 
 def get_case_description(case_id):
     """Get the description of a specific case."""

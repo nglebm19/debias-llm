@@ -4,101 +4,125 @@ from cases import get_case_titles, get_case_description, strip_bias_note
 
 NO_CASE = "Select a case..."
 
+_OVERLAP_CLASS = {"Low": "overlap-low", "Medium": "overlap-medium", "High": "overlap-high"}
+
+
 def analyze_medical_case(case_input, custom_case_text=""):
 	"""Run the three-agent analysis on the custom text if given, else the selected sample case."""
 	if custom_case_text and custom_case_text.strip():
 		case_text = custom_case_text.strip()
-		case_display = f"**Custom Case:**\n\n{case_text}"
+		case_display = f"**Custom Case**\n\n{case_text}"
 	elif case_input in get_case_titles():
 		full = get_case_description(case_input)
 		case_text = strip_bias_note(full)
 		case_display = f"**{get_case_titles()[case_input]}**\n\n{full}"
 	else:
-		return "", "**Select a sample case or enter a custom case.**", "", "", ""
+		msg = "Select a sample case or enter a custom case to begin."
+		return "", msg, "", "", gr.update(value="", elem_classes=["overlap-card"])
 
 	results = run_medical_analysis(case_text)
 	if results["status"] != "success":
 		err = f"**Error:** {results.get('error', 'Unknown error')}"
-		return case_display, err, err, err, ""
+		return case_display, err, err, err, gr.update(value="", elem_classes=["overlap-card"])
+
+	score = results["structured"]["agent2_overlap"]["score"]
+	overlap_classes = ["overlap-card", _OVERLAP_CLASS.get(score, "")]
 	return (
 		case_display,
-		f"**Agent 1 (Diagnostician):**\n\n{results['agent1']}",
-		f"**Agent 2 (Independent Devil's Advocate):**\n\n{results['agent2']}",
-		f"**Agent 3 (Synthesizer) – Final Result:**\n\n{results['agent3']}",
-		results["overlap"],
+		results["agent1"],
+		results["agent2"],
+		results["agent3"],
+		gr.update(value=results["overlap"], elem_classes=overlap_classes),
 	)
+
 
 def clear_analysis():
 	"""Clear all analysis outputs."""
-	return "", "", "", "", ""
+	return "", "", "", "", gr.update(value="", elem_classes=["overlap-card"])
 
-# Create the Gradio interface
+
+_CSS = """
+.gradio-container { max-width: 900px !important; margin: 0 auto !important; }
+#title { text-align: center; margin-bottom: 0.25rem; }
+#subtitle { text-align: center; color: #6b7280; margin-bottom: 1.5rem; font-size: 0.95rem; }
+
+.case-display, .overlap-card {
+	background: #ffffff; color: #111827;
+	border: 1px solid #e5e7eb; border-radius: 10px;
+	padding: 16px 18px; margin: 8px 0;
+}
+.case-display *, .overlap-card * { color: inherit !important; }
+
+.overlap-card { border-left: 4px solid #9ca3af; }
+.overlap-low { border-left-color: #16a34a; }
+.overlap-medium { border-left-color: #d97706; }
+.overlap-high { border-left-color: #dc2626; }
+
+.result-tabs .tab-nav { border-bottom: 1px solid #e5e7eb; }
+"""
+
+
 def create_interface():
 	"""Create and configure the Gradio interface."""
-	
+
 	with gr.Blocks(
 		title="Devil's Advocate Multi-Agent Medical Analysis System",
-		theme=gr.themes.Soft(),
-		css="""
-		.bias-highlight, .agent-output, .case-display { color: #111 !important; }
-		.bias-highlight * , .agent-output * , .case-display * { color: inherit !important; }
-		.bias-highlight { background-color: #fff3cd; border-left: 4px solid #ffc107; padding: 10px; margin: 10px 0; }
-		.agent-output { background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 5px; padding: 15px; margin: 10px 0; }
-		.case-display { background-color: #e3f2fd; border: 1px solid #2196f3; border-radius: 5px; padding: 15px; margin: 10px 0; }
-		"""
+		theme=gr.themes.Soft(primary_hue="indigo", neutral_hue="slate", radius_size="lg"),
+		css=_CSS,
 	) as interface:
-		
-		gr.Markdown("""
-		# 🏥 Devil's Advocate Multi-Agent Medical Analysis System
-		
-		Revised pipeline:
-		1) Agent 1 – Full-case diagnosis
-		2) Agent 2 – Diagnosis from Symptoms+Exam, then overlap with PMH
-		3) Agent 3 – Final synthesis and impact of past disease
-		""")
-		
+
+		gr.Markdown("# 🏥 Devil's Advocate", elem_id="title")
+		gr.Markdown(
+			"Agent 1 sees the full case. Agent 2 diagnoses blind to past history, then rates the overlap. "
+			"Agent 3 synthesizes both.",
+			elem_id="subtitle",
+		)
+
 		with gr.Row():
 			with gr.Column(scale=1):
-				gr.Markdown("### 📋 Case Selection")
 				case_dropdown = gr.Dropdown(
 					choices=[NO_CASE] + list(get_case_titles().keys()),
-					label="Choose a Sample Case",
+					label="Sample Case",
 					value=NO_CASE,
-					interactive=True
 				)
 				custom_case = gr.Textbox(
-					label="Or Input Custom Medical Case",
-					placeholder="Describe the patient's symptoms, history, and examination findings...",
-					lines=8,
-					interactive=True
+					label="Or paste a custom case",
+					placeholder="Symptoms, history, exam findings...",
+					lines=6,
 				)
-				analyze_btn = gr.Button("🔍 Run Analysis", variant="primary", size="lg")
-				clear_btn = gr.Button("🗑️ Clear Analysis", variant="secondary")
+				with gr.Row():
+					analyze_btn = gr.Button("Run Analysis", variant="primary")
+					clear_btn = gr.Button("Clear", variant="secondary")
+
 			with gr.Column(scale=2):
-				gr.Markdown("### 📊 Analysis Results")
-				case_display = gr.Markdown(label="Case Information", elem_classes=["case-display"])
-				agent1_output = gr.Markdown(label="Agent 1: Diagnostician", elem_classes=["agent-output"])
-				agent2_output = gr.Markdown(label="Agent 2: Independent Devil's Advocate", elem_classes=["agent-output"])
-				agent3_output = gr.Markdown(label="Agent 3: Synthesizer – Final", elem_classes=["agent-output"])
-				overlap_panel = gr.Markdown(label="Overlap & Impact Summary", elem_classes=["bias-highlight"])
-		
+				case_display = gr.Markdown(elem_classes=["case-display"])
+				overlap_panel = gr.Markdown(elem_classes=["overlap-card"])
+				with gr.Tabs(elem_classes=["result-tabs"]):
+					with gr.Tab("Agent 1 · Diagnostician"):
+						agent1_output = gr.Markdown()
+					with gr.Tab("Agent 2 · Devil's Advocate"):
+						agent2_output = gr.Markdown()
+					with gr.Tab("Agent 3 · Final"):
+						agent3_output = gr.Markdown()
+
 		analyze_btn.click(
 			fn=analyze_medical_case,
 			inputs=[case_dropdown, custom_case],
-			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel]
+			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel],
 		)
-		
+
 		clear_btn.click(
 			fn=clear_analysis,
-			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel]
+			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel],
 		)
-		
-		gr.Markdown("""
-		---
-		For education only; not clinical advice.
-		""")
-	
+
+		gr.Markdown(
+			"<div style='text-align:center;color:#9ca3af;font-size:0.85rem;margin-top:1.5rem;'>"
+			"For education only, not clinical advice.</div>"
+		)
+
 	return interface
+
 
 if __name__ == "__main__":
 	interface = create_interface()

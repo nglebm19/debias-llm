@@ -18,27 +18,32 @@ def analyze_medical_case(case_input, custom_case_text=""):
 		case_display = f"**{get_case_titles()[case_input]}**\n\n{full}"
 	else:
 		msg = "Select a sample case or enter a custom case to begin."
-		return "", msg, "", "", gr.update(value="", elem_classes=["overlap-card"])
+		return "", msg, "", "", gr.update(value="", elem_classes=["overlap-card"]), gr.update(visible=False)
 
 	results = run_medical_analysis(case_text)
 	if results["status"] != "success":
 		err = f"**Error:** {results.get('error', 'Unknown error')}"
-		return case_display, err, err, err, gr.update(value="", elem_classes=["overlap-card"])
+		return case_display, err, err, err, gr.update(value="", elem_classes=["overlap-card"]), gr.update(visible=False)
 
 	score = results["structured"]["agent2_overlap"]["score"]
 	overlap_classes = ["overlap-card", _OVERLAP_CLASS.get(score, "")]
+	banner = gr.update(
+		value="**Demo mode** — no `ANTHROPIC_API_KEY` configured, showing canned mock output below, not a real diagnosis.",
+		visible=bool(results.get("mock")),
+	)
 	return (
 		case_display,
 		results["agent1"],
 		results["agent2"],
 		results["agent3"],
 		gr.update(value=results["overlap"], elem_classes=overlap_classes),
+		banner,
 	)
 
 
 def clear_analysis():
 	"""Clear all analysis outputs."""
-	return "", "", "", "", gr.update(value="", elem_classes=["overlap-card"])
+	return "", "", "", "", gr.update(value="", elem_classes=["overlap-card"]), gr.update(visible=False)
 
 
 _CSS = """
@@ -59,6 +64,12 @@ _CSS = """
 .overlap-high { border-left-color: #dc2626; }
 
 .result-tabs .tab-nav { border-bottom: 1px solid #e5e7eb; }
+
+.demo-banner {
+	background: #fffbeb; color: #92400e; border: 1px solid #fde68a;
+	border-radius: 10px; padding: 10px 16px; margin-bottom: 12px; text-align: center;
+}
+.demo-banner * { color: inherit !important; }
 """
 
 
@@ -77,6 +88,7 @@ def create_interface():
 			"Agent 3 synthesizes both.",
 			elem_id="subtitle",
 		)
+		demo_banner = gr.Markdown(visible=False, elem_classes=["demo-banner"])
 
 		with gr.Row():
 			with gr.Column(scale=1):
@@ -108,12 +120,12 @@ def create_interface():
 		analyze_btn.click(
 			fn=analyze_medical_case,
 			inputs=[case_dropdown, custom_case],
-			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel],
+			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel, demo_banner],
 		)
 
 		clear_btn.click(
 			fn=clear_analysis,
-			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel],
+			outputs=[case_display, agent1_output, agent2_output, agent3_output, overlap_panel, demo_banner],
 		)
 
 		gr.Markdown(

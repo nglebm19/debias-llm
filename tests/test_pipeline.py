@@ -99,3 +99,35 @@ def test_pipeline_reports_error_instead_of_raising(tmp_path):
 	result = run_medical_analysis("x", make_llm(tmp_path, Broken()))
 	assert result["status"] == "error"
 	assert "no key" in result["error"]
+
+
+def test_auto_mock_mode_when_no_api_key_and_no_client(tmp_path, monkeypatch):
+	monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+	monkeypatch.delenv("DEBIAS_MOCK", raising=False)
+	llm = LLMClient(cache_dir=tmp_path)  # no client injected -> auto-detects demo mode
+	assert llm.mock is True
+
+	result = run_medical_analysis(strip_bias_note(get_case_description("case_1")), llm)
+	assert result["status"] == "success"
+	assert result["mock"] is True
+	assert "DEMO" in result["agent1"]
+
+
+def test_injected_client_is_never_auto_mocked(tmp_path, monkeypatch):
+	monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+	monkeypatch.delenv("DEBIAS_MOCK", raising=False)
+	llm = make_llm(tmp_path, FakeAnthropic())
+	assert llm.mock is False
+
+
+def test_debias_mock_env_forces_mock_on(tmp_path, monkeypatch):
+	monkeypatch.setenv("DEBIAS_MOCK", "1")
+	llm = make_llm(tmp_path, FakeAnthropic())  # forced mock overrides the injected client
+	assert llm.mock is True
+
+
+def test_debias_mock_env_forces_mock_off(tmp_path, monkeypatch):
+	monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+	monkeypatch.setenv("DEBIAS_MOCK", "0")
+	llm = LLMClient(cache_dir=tmp_path)
+	assert llm.mock is False

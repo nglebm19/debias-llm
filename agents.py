@@ -205,6 +205,7 @@ def run_medical_analysis(case_text: str, llm: LLMClient | None = None) -> dict:
 		synth = synthesizer_agent(case, a1, blind, overlap, llm)
 		return {
 			"status": "success",
+			"mock": llm.mock,
 			"agent1": render_diagnosis(a1),
 			"agent2": render_agent2(blind, overlap),
 			"agent3": render_synthesis(synth),
